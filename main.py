@@ -94,37 +94,67 @@ def generate_cloud(messages, tools):
     }
 
 
-def generate_hybrid(messages, tools, confidence_threshold=0.6):
+def generate_hybrid(messages, tools, confidence_threshold=0.65):
     """
     Improved hybrid routing:
-    - Prefer on-device when confident AND valid
-    - Fallback to cloud when low confidence or malformed output
+    - Prefer on-device when confident, valid, and simple
+    - Fallback to cloud when low confidence, malformed output, or complex query
     """
 
     local = generate_cactus(messages, tools)
 
+    # Collect valid tool names
     valid_tool_names = {t["name"] for t in tools}
 
-    # ---- Basic validation checks ----
+    # ---- Check basic validity ----
     no_calls = len(local.get("function_calls", [])) == 0
 
     malformed = False
+    invalid_args = False
+
+    required_params = {
+        t["name"]: set(t["parameters"].get("required", []))
+        for t in tools
+    }
+
     for call in local.get("function_calls", []):
+        # Check if tool exists
         if call["name"] not in valid_tool_names:
             malformed = True
             break
+
+        # Check if arguments are dict
         if not isinstance(call.get("arguments", {}), dict):
             malformed = True
             break
 
+        # Check if all required arguments are present
+        required = required_params.get(call["name"], set())
+        provided = set(call.get("arguments", {}).keys())
+        if not required.issubset(provided):
+            invalid_args = True
+            break
+
+    # ---- Detect complex user query ----
+    user_text = " ".join(m["content"] for m in messages if m["role"] == "user")
+    complex_keywords = ["and", "or", "if", "compare", "difference", "between"]
+    is_complex = any(k in user_text.lower() for k in complex_keywords)
+
+    # ---- Low confidence ----
     low_conf = local.get("confidence", 0) < confidence_threshold
 
     # ---- Decide routing ----
-    if not no_calls and not malformed and not low_conf:
+    # Stay on-device only if:
+    # 1. Has function call(s)
+    # 2. Not malformed
+    # 3. Not invalid args
+    # 4. Not complex query
+    # 5. Confidence high enough
+    if not no_calls and not malformed and not invalid_args and not is_complex and not low_conf:
         local["source"] = "on-device"
         return local
 
-    # Fallback to cloud
+    # Otherwise fallback to cloud
     cloud = generate_cloud(messages, tools)
     cloud["source"] = "cloud (fallback)"
     cloud["local_confidence"] = local.get("confidence", 0)
