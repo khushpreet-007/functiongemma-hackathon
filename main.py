@@ -141,6 +141,20 @@ def generate_hybrid(messages, tools, confidence_threshold=0.99):
 
     return cloud
 
+def print_result(label, result):
+    """Pretty-print a generation result."""
+    print(f"\n=== {label} ===\n")
+    if "source" in result:
+        print(f"Source: {result['source']}")
+    if "confidence" in result:
+        print(f"Confidence: {result['confidence']:.4f}")
+    if "local_confidence" in result:
+        print(f"Local confidence (below threshold): {result['local_confidence']:.4f}")
+    print(f"Total time: {result['total_time_ms']:.2f}ms")
+    for call in result["function_calls"]:
+        print(f"Function: {call['name']}")
+        print(f"Arguments: {json.dumps(call['arguments'], indent=2)}")
+        
 ############## Example usage ##############
 
 if __name__ == "__main__":
