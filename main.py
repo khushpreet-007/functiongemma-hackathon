@@ -94,50 +94,41 @@ def generate_cloud(messages, tools):
     }
 
 
-def generate_hybrid(messages, tools, confidence_threshold=0.99):
+def generate_hybrid(messages, tools, confidence_threshold=0.6):
     """
-    Advanced hybrid routing strategy optimized for leaderboard.
-
-    Strategy:
-    - Strongly prefer on-device execution.
-    - Validate structure of local function calls.
-    - Only fallback when clearly unsafe.
-    - Ignore overly strict baseline threshold (0.99).
+    Improved hybrid routing:
+    - Prefer on-device when confident AND valid
+    - Fallback to cloud when low confidence or malformed output
     """
 
     local = generate_cactus(messages, tools)
 
-    local_conf = local.get("confidence", 0)
-    local_calls = local.get("function_calls", [])
-    local_time = local.get("total_time_ms", 0)
+    valid_tool_names = {t["name"] for t in tools}
 
-    # ---- Heuristic 1: If local produced valid function calls, trust it ----
-    if local_calls and local_conf >= 0.75:
-        # Validate argument completeness
-        structurally_valid = True
+    # ---- Basic validation checks ----
+    no_calls = len(local.get("function_calls", [])) == 0
 
-        for call in local_calls:
-            if not call.get("name"):
-                structurally_valid = False
-                break
-            if not isinstance(call.get("arguments"), dict):
-                structurally_valid = False
-                break
+    malformed = False
+    for call in local.get("function_calls", []):
+        if call["name"] not in valid_tool_names:
+            malformed = True
+            break
+        if not isinstance(call.get("arguments", {}), dict):
+            malformed = True
+            break
 
-        if structurally_valid:
-            local["source"] = "on-device"
-            return local
+    low_conf = local.get("confidence", 0) < confidence_threshold
 
-    # ---- Heuristic 2: Even lower confidence but still has calls ----
-    if local_calls and local_conf >= 0.5:
+    # ---- Decide routing ----
+    if not no_calls and not malformed and not low_conf:
         local["source"] = "on-device"
         return local
 
-    # ---- Otherwise fallback to cloud ----
+    # Fallback to cloud
     cloud = generate_cloud(messages, tools)
     cloud["source"] = "cloud (fallback)"
-    cloud["local_confidence"] = local_conf
-    cloud["total_time_ms"] += local_time
+    cloud["local_confidence"] = local.get("confidence", 0)
+    cloud["total_time_ms"] += local.get("total_time_ms", 0)
 
     return cloud
 
@@ -154,7 +145,7 @@ def print_result(label, result):
     for call in result["function_calls"]:
         print(f"Function: {call['name']}")
         print(f"Arguments: {json.dumps(call['arguments'], indent=2)}")
-        
+
 ############## Example usage ##############
 
 if __name__ == "__main__":
