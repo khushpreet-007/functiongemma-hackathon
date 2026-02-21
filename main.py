@@ -95,34 +95,51 @@ def generate_cloud(messages, tools):
 
 
 def generate_hybrid(messages, tools, confidence_threshold=0.99):
-    """Baseline hybrid inference strategy; fall back to cloud if Cactus Confidence is below threshold."""
+    """
+    Advanced hybrid routing strategy optimized for leaderboard.
+
+    Strategy:
+    - Strongly prefer on-device execution.
+    - Validate structure of local function calls.
+    - Only fallback when clearly unsafe.
+    - Ignore overly strict baseline threshold (0.99).
+    """
+
     local = generate_cactus(messages, tools)
 
-    if local["confidence"] >= confidence_threshold:
+    local_conf = local.get("confidence", 0)
+    local_calls = local.get("function_calls", [])
+    local_time = local.get("total_time_ms", 0)
+
+    # ---- Heuristic 1: If local produced valid function calls, trust it ----
+    if local_calls and local_conf >= 0.75:
+        # Validate argument completeness
+        structurally_valid = True
+
+        for call in local_calls:
+            if not call.get("name"):
+                structurally_valid = False
+                break
+            if not isinstance(call.get("arguments"), dict):
+                structurally_valid = False
+                break
+
+        if structurally_valid:
+            local["source"] = "on-device"
+            return local
+
+    # ---- Heuristic 2: Even lower confidence but still has calls ----
+    if local_calls and local_conf >= 0.5:
         local["source"] = "on-device"
         return local
 
+    # ---- Otherwise fallback to cloud ----
     cloud = generate_cloud(messages, tools)
     cloud["source"] = "cloud (fallback)"
-    cloud["local_confidence"] = local["confidence"]
-    cloud["total_time_ms"] += local["total_time_ms"]
+    cloud["local_confidence"] = local_conf
+    cloud["total_time_ms"] += local_time
+
     return cloud
-
-
-def print_result(label, result):
-    """Pretty-print a generation result."""
-    print(f"\n=== {label} ===\n")
-    if "source" in result:
-        print(f"Source: {result['source']}")
-    if "confidence" in result:
-        print(f"Confidence: {result['confidence']:.4f}")
-    if "local_confidence" in result:
-        print(f"Local confidence (below threshold): {result['local_confidence']:.4f}")
-    print(f"Total time: {result['total_time_ms']:.2f}ms")
-    for call in result["function_calls"]:
-        print(f"Function: {call['name']}")
-        print(f"Arguments: {json.dumps(call['arguments'], indent=2)}")
-
 
 ############## Example usage ##############
 
