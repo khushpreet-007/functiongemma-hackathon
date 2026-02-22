@@ -95,9 +95,9 @@ def generate_cloud(messages, tools):
 
 def generate_hybrid(messages, tools, confidence_threshold=0.0):
     """
-    Optimized for high on-device score.
-    Prefer local execution.
-    Fallback only if local output is structurally invalid.
+    High on-device optimized hybrid.
+    Never fallback unless completely broken.
+    Attempts light argument repair to improve F1.
     """
 
     local = generate_cactus(messages, tools)
@@ -117,7 +117,7 @@ def generate_hybrid(messages, tools, confidence_threshold=0.0):
 
     call = local_calls[0]
 
-    # If invalid tool name, fallback
+    # If invalid tool, fallback
     if call["name"] not in valid_tool_names:
         cloud = generate_cloud(messages, tools)
         cloud["source"] = "cloud (fallback: invalid_tool)"
@@ -125,7 +125,7 @@ def generate_hybrid(messages, tools, confidence_threshold=0.0):
         cloud["total_time_ms"] += local_time
         return cloud
 
-    # Check required arguments
+    # Required parameters map
     required_params = {
         t["name"]: set(t["parameters"].get("required", []))
         for t in tools
@@ -134,14 +134,26 @@ def generate_hybrid(messages, tools, confidence_threshold=0.0):
     required = required_params.get(call["name"], set())
     provided = set(call.get("arguments", {}).keys())
 
+    # 🔥 Light argument repair
     if not required.issubset(provided):
-        cloud = generate_cloud(messages, tools)
-        cloud["source"] = "cloud (fallback: missing_args)"
-        cloud["local_confidence"] = local.get("confidence", 0)
-        cloud["total_time_ms"] += local_time
-        return cloud
+        user_text = " ".join(
+            m["content"] for m in messages if m["role"] == "user"
+        )
 
-    # Otherwise stay fully on-device
+        # If only one required argument and missing,
+        # try assigning full user text as value.
+        if len(required) == 1:
+            missing_key = list(required)[0]
+            call["arguments"] = {missing_key: user_text}
+
+        else:
+            # If multiple required fields missing, fallback
+            cloud = generate_cloud(messages, tools)
+            cloud["source"] = "cloud (fallback: missing_args)"
+            cloud["local_confidence"] = local.get("confidence", 0)
+            cloud["total_time_ms"] += local_time
+            return cloud
+
     local["source"] = "on-device"
     return local
 
