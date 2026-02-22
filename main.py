@@ -93,29 +93,57 @@ def generate_cloud(messages, tools):
         "total_time_ms": total_time_ms,
     }
 
-def generate_hybrid(messages, tools, confidence_threshold=0.9):
+def generate_hybrid(messages, tools, confidence_threshold=0.0):
+    """
+    Optimized for high on-device score.
+    Prefer local execution.
+    Fallback only if local output is structurally invalid.
+    """
+
     local = generate_cactus(messages, tools)
 
+    local_calls = local.get("function_calls", [])
     local_time = local.get("total_time_ms", 0)
 
-    # Build deterministic routing key from user message
-    user_text = " ".join(
-        m["content"] for m in messages if m["role"] == "user"
-    )
+    valid_tool_names = {t["name"] for t in tools}
 
-    routing_key = sum(ord(c) for c in user_text) % 10
+    # If no calls, fallback
+    if not local_calls:
+        cloud = generate_cloud(messages, tools)
+        cloud["source"] = "cloud (fallback: no_calls)"
+        cloud["local_confidence"] = local.get("confidence", 0)
+        cloud["total_time_ms"] += local_time
+        return cloud
 
-    # 70% on-device, 30% cloud
-    if routing_key < 7 and local.get("function_calls"):
-        local["source"] = "on-device"
-        return local
+    call = local_calls[0]
 
-    # fallback
-    cloud = generate_cloud(messages, tools)
-    cloud["source"] = "cloud (fallback)"
-    cloud["local_confidence"] = local.get("confidence", 0)
-    cloud["total_time_ms"] += local_time
-    return cloud
+    # If invalid tool name, fallback
+    if call["name"] not in valid_tool_names:
+        cloud = generate_cloud(messages, tools)
+        cloud["source"] = "cloud (fallback: invalid_tool)"
+        cloud["local_confidence"] = local.get("confidence", 0)
+        cloud["total_time_ms"] += local_time
+        return cloud
+
+    # Check required arguments
+    required_params = {
+        t["name"]: set(t["parameters"].get("required", []))
+        for t in tools
+    }
+
+    required = required_params.get(call["name"], set())
+    provided = set(call.get("arguments", {}).keys())
+
+    if not required.issubset(provided):
+        cloud = generate_cloud(messages, tools)
+        cloud["source"] = "cloud (fallback: missing_args)"
+        cloud["local_confidence"] = local.get("confidence", 0)
+        cloud["total_time_ms"] += local_time
+        return cloud
+
+    # Otherwise stay fully on-device
+    local["source"] = "on-device"
+    return local
 
 def print_result(label, result):
     """Pretty-print a generation result."""
