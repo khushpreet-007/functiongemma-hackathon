@@ -93,19 +93,19 @@ def generate_cloud(messages, tools):
         "total_time_ms": total_time_ms,
     }
 
-
-def generate_hybrid(messages, tools, confidence_threshold=0.85):
+def generate_hybrid(messages, tools, confidence_threshold=0.95):
     local = generate_cactus(messages, tools)
 
     local_conf = local.get("confidence", 0)
     local_time = local.get("total_time_ms", 0)
+    local_calls = local.get("function_calls", [])
 
-    # If confidence very high → trust local
-    if local_conf >= confidence_threshold and local.get("function_calls"):
+    # Stay local only if VERY confident and has valid call
+    if local_conf >= confidence_threshold and local_calls:
         local["source"] = "on-device"
         return local
 
-    # Otherwise fallback aggressively
+    # Otherwise fallback to cloud
     cloud = generate_cloud(messages, tools)
     cloud["source"] = "cloud (fallback)"
     cloud["local_confidence"] = local_conf
