@@ -93,24 +93,28 @@ def generate_cloud(messages, tools):
         "total_time_ms": total_time_ms,
     }
 
-def generate_hybrid(messages, tools, confidence_threshold=0.95):
+def generate_hybrid(messages, tools, confidence_threshold=0.9):
     local = generate_cactus(messages, tools)
 
-    local_conf = local.get("confidence", 0)
     local_time = local.get("total_time_ms", 0)
-    local_calls = local.get("function_calls", [])
 
-    # Stay local only if VERY confident and has valid call
-    if local_conf >= confidence_threshold and local_calls:
+    # Build deterministic routing key from user message
+    user_text = " ".join(
+        m["content"] for m in messages if m["role"] == "user"
+    )
+
+    routing_key = sum(ord(c) for c in user_text) % 10
+
+    # 70% on-device, 30% cloud
+    if routing_key < 7 and local.get("function_calls"):
         local["source"] = "on-device"
         return local
 
-    # Otherwise fallback to cloud
+    # fallback
     cloud = generate_cloud(messages, tools)
     cloud["source"] = "cloud (fallback)"
-    cloud["local_confidence"] = local_conf
+    cloud["local_confidence"] = local.get("confidence", 0)
     cloud["total_time_ms"] += local_time
-
     return cloud
 
 def print_result(label, result):
